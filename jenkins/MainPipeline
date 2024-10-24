@@ -4,17 +4,8 @@ pipeline {
         AWS_ACCESS_KEY_ID = credentials('ACESS_KEY')
         AWS_SECRET_ACCESS_KEY = credentials('SECRET_KEY')
         AWS_REGION = 'us-east-1'
-        PROPERTIES_PATH = 'angular-java/spring-backend/src/main/resources/application.properties'
-        SCHEMA_PATH = 'angular-java/springbackend.sql'
-        RDS_ENDPOINT_FILE = '/var/lib/jenkins/workspace/MainPipeline/terraform/rds_endpoint.txt'
-        BACKEND_DOCKER_IMAGE_NAME = 'backend'
-        IMAGE_TAG = 'latest'
-        BACKEND_REPO = 'public.ecr.aws/p0w5f0m4/backend'
-        FRONTEND_DOCKER_IMAGE_NAME = 'frontend'
-        FRONTEND_REPO = 'public.ecr.aws/p0w5f0m4/frontend'
-        CLUSTER_NAME = 'msd'
     }
-    stages {
+        stages{
         stage('Validate AWS CLI Credentials') {
             steps {
                 script {
@@ -33,7 +24,6 @@ pipeline {
         stage('Checkout SCM') {
             steps {
                 script {
-                    // Cloning Git repo
                     checkout(scmGit(
                         branches: [[name: '*/main']],
                         extensions: [],
@@ -41,230 +31,17 @@ pipeline {
                     ))
                 }
             }
-        }
-        stage('Initializing And Validating Terraform') {
-            steps {
-                dir('terraform') {
-                    sh 'terraform init && terraform validate'
-                }
-            }
-        }
-        stage('Previewing the infrastructure') {
-            steps {
-                dir('terraform') {
-                    sh 'terraform plan'
-                }
-            }
-        }   
-        stage('Create/Destroy an EKS cluster') {
+        }    
+        stage('Logging into DockerHub') {
             steps {
                 script {
-                    dir('terraform') {
-                        sh 'terraform apply --auto-approve'
+                    withCredentials([usernamePassword(credentialsId:"dockerhubcred", passwordVariable:"dockerhubpass", usernameVariable:"dockerhubuser")]){
+                    sh "docker login -u ${env.dockerhubuser} -p ${env.dockerhubpass}"
                     }
+                    dir('angular-java/spring-backend') {
+                    sh "docker build -t ${env.dockerhubuser}:latest ."
                 }
-            }
-        }
-       stage('create cluster or proceed') {
-        steps {
-            script {
-                def status = sh(
-                    script: """
-                        eksctl create cluster \
-                        --name msd \
-                        --region us-east-1 \
-                        --nodes 2 \
-                        --nodes-min 1 \
-                        --nodes-max 3 \
-                        --nodegroup-name my-nodegroup \
-                        --node-type t3.medium \
-                        --managed 2>&1
-                    """,
-                    returnStatus: true  // Capture exit status (0 for success, non-zero for failure)
-                )
-                if (status != 0) { // If the cluster creation command failed
-                    def output = sh(
-                        script: "eksctl get cluster --name msd --region us-east-1",
-                        returnStatus: true
-                    )
-                
-                    if (output == 0) {
-                        echo "Cluster 'msd' already exists. Proceeding to the next stage."
-                    } else {
-                        echo "Failed to create cluster 'msd' for an unknown reason. Proceeding to the next stage."
-                    }
-                } else {
-                    echo "Cluster created successfully! Proceeding to the next stage."
-                    }
-                }
-            }
-        }
-        stage('Capture the RDS endpoint output') {
-            steps {
-                script {
-                    dir('terraform') {
-                        // Capture the RDS endpoint output
-                        def rdsEndpoint = sh(script: 'terraform output -json rds_endpoint', returnStdout: true).trim()
-                        
-                        // Write the RDS endpoint to a text file
-                        writeFile file: 'rds_endpoint.txt', text: rdsEndpoint
-                        echo "RDS Endpoint written to rds_endpoint.txt: ${rdsEndpoint}"
-                    }
-                }
-            }
-        }
-        stage('Get RDS Endpoint from File') {
-            steps {
-                script {
-                    if (fileExists(RDS_ENDPOINT_FILE)) {
-                        // Read the endpoint and remove the port if it exists
-                        env.RDS_ENDPOINT = readFile(RDS_ENDPOINT_FILE).trim().replaceAll('"', '').replaceAll(':3306', '')
-                        echo "RDS Endpoint: ${env.RDS_ENDPOINT}"
-                    } else {
-                        error("RDS endpoint file does not exist: ${RDS_ENDPOINT_FILE}")
-                    }
-                }
-            }
-        }
-        stage('Update application.properties') {
-            steps {
-                withCredentials([
-                    string(credentialsId: 'username', variable: 'DB_USER'),
-                    string(credentialsId: 'password', variable: 'DB_PASSWORD')
-                ]) {
-                    script {
-                        //Updating application.properties with RDS and DB credentials for database connection with database
-                        echo "Updating application.properties with RDS and DB credentials..."
-                        sh """
-                        sed -i "s|^spring.datasource.url=.*|spring.datasource.url=jdbc:mysql://${env.RDS_ENDPOINT}:3306/springbackend?useSSL=false|" ${PROPERTIES_PATH}
-                        sed -i "s|^spring.datasource.username=.*|spring.datasource.username=${DB_USER}|" ${PROPERTIES_PATH}
-                        sed -i "s|^spring.datasource.password=.*|spring.datasource.password=${DB_PASSWORD}|" ${PROPERTIES_PATH}
-                        """
-                    }
-                }
-            }
-        }
-        stage('Insert Database Schema') {
-            steps {
-                // Inserting SQL Schema In Database
-                withCredentials([
-                    string(credentialsId: 'username', variable: 'DB_USER'),
-                    string(credentialsId: 'password', variable: 'DB_PASSWORD')
-                ]) {
-                    script {
-                        echo "Creating database 'springbackend' if it doesn't exist..."
-                        sh """
-                        mysql -h ${env.RDS_ENDPOINT} -u ${DB_USER} -p${DB_PASSWORD} -e "CREATE DATABASE IF NOT EXISTS springbackend;"
-
-                        echo "Inserting schema into the 'springbackend' database..."
-                        mysql -h ${env.RDS_ENDPOINT} -u ${DB_USER} -p${DB_PASSWORD} springbackend < ${SCHEMA_PATH}
-                        """
-                    }
-                }
-            }
-        }
-        stage('Logging into AWS ECR of Backend repo') {
-            steps {
-                script {
-                    sh """aws ecr-public get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin public.ecr.aws/p0w5f0m4"""
-                }
-            }
-        }
-        stage('Building Backend image') {
-            steps {
-                dir('angular-java/spring-backend') {
-                    sh "docker build -t ${BACKEND_DOCKER_IMAGE_NAME} ."
-                }
-            }
-        }
-        stage('Pushing Backend Image to ECR') {
-            steps {
-                script {
-                    sh "docker tag ${BACKEND_DOCKER_IMAGE_NAME}:${IMAGE_TAG} ${BACKEND_REPO}:${IMAGE_TAG}"
-                    sh "docker push ${BACKEND_REPO}:${IMAGE_TAG}"
-                }
-            }
-        }
-        stage('Replacing Backend Image URI in Deployment Manifest File') {
-            steps {
-                script {
-                    def imageURI = "${BACKEND_REPO}:${IMAGE_TAG}"
-                    def manifestFile = 'angular-java/spring-backend/manifest/deployment.yaml'
-
-                    // Use sed to replace the image in the YAML file
-                    sh """
-                    sed -i 's|image:.*|image: ${imageURI}|' ${manifestFile}
-                    """
-                    
-                    // verify the replacement
-                    sh "cat ${manifestFile}"
-                }
-            }
-        }
-        stage('Updating Kubeconfig') {
-            steps {
-                script {
-                    // Updating Cluster Name and Region To Kubeconfig
-                    sh "aws eks --region ${AWS_REGION} update-kubeconfig --name ${CLUSTER_NAME}"
-                }
-            }
-        }
-        stage('Create OIDC Provider and IAM policies') {
-            steps {
-                script {
-                    sh '''
-                    #!/bin/bash
-                    set -e
-
-                    # Creating OIDC Provider for cluster
-                    cluster_name=msd
-                    oidc_id=$(aws eks describe-cluster --name msd --query "cluster.identity.oidc.issuer" --output text | cut -d '/' -f 5)
-                    echo $oidc_id
-                    aws iam list-open-id-connect-providers | grep $oidc_id | cut -d "/" -f4
-                    eksctl utils associate-iam-oidc-provider --cluster msd --approve
-
-                    # Install AWS Load Balancer Controller with manifests
-                    curl -O https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.7.2/docs/install/iam_policy.json
-
-                    # Check if the IAM policy already exists
-                    if aws iam get-policy --policy-arn arn:aws:iam::891377175977:policy/AWSLoadBalancerControllerIAMPolicy 2>/dev/null; then
-                        echo "Policy AWSLoadBalancerControllerIAMPolicy already exists."
-                    else
-                        aws iam create-policy \
-                            --policy-name AWSLoadBalancerControllerIAMPolicy \
-                            --policy-document file://iam_policy.json
-                    fi
-
-                    eksctl create iamserviceaccount \
-                      --cluster=msd \
-                      --namespace=kube-system \
-                      --name=aws-load-balancer-controller \
-                      --role-name AmazonEKSLoadBalancerControllerRole \
-                      --attach-policy-arn=arn:aws:iam::891377175977:policy/AWSLoadBalancerControllerIAMPolicy \
-                      --approve
-
-                    '''
-                }
-            }
-        }
-        stage('Install AWS Load Balancer Controller') {
-            steps {
-                script {
-                    sh '''
-                    #!/bin/bash
-                    
-                    kubectl apply \
-                        --validate=false \
-                        -f https://github.com/jetstack/cert-manager/releases/download/v1.13.5/cert-manager.yaml
-                     curl -Lo /tmp/v2_7_2_full.yaml https://github.com/kubernetes-sigs/aws-load-balancer-controller/releases/download/v2.7.2/v2_7_2_full.yaml
-                    sed -i.bak -e '612,620d' /tmp/v2_7_2_full.yaml
-                    sed -i.bak -e "s|your-cluster-name|msd|" /tmp/v2_7_2_full.yaml
-                    kubectl apply -f /tmp/v2_7_2_full.yaml
-                    curl -Lo /tmp/v2_7_2_ingclass.yaml https://github.com/kubernetes-sigs/aws-load-balancer-controller/releases/download/v2.7.2/v2_7_2_ingclass.yaml
-                    kubectl apply -f /tmp/v2_7_2_ingclass.yaml
-                    kubectl get deployment -n kube-system aws-load-balancer-controller
-                    '''
-                }
+                }    
             }
         }
         stage('Create Namespace') {
@@ -310,58 +87,6 @@ pipeline {
                 }
             }
         }
-        stage('Verify Ingress Deployment') {
-            steps {
-                script {
-                    sh '''
-                    kubectl get ingress -n dev
-                    '''
-                }
-            }
-        }
-        stage('Wait for 1 Minute') {
-            steps {
-                script {
-                    echo "Waiting for 1 minute..."
-                    sleep(time: 60, unit: 'SECONDS') // Wait for 60 seconds
-                }
-            }
-        }
-        stage('Replace ALB DNS in Frontend') {
-            steps {
-                script {
-                 def albDNS = sh(script: "kubectl get ingress -n dev -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}'", returnStdout: true).trim()
-                 def serviceFilePath = 'angular-java/angular-frontend/src/app/services/worker.service.ts'
-
-                 // Using double quotes for the outer shell command and single quotes inside for sed
-                 sh "sed -i 's|k8s-default-myapping-8cf2186fe6-1630135583.us-east-1.elb.amazonaws.com|${albDNS}|g' ${serviceFilePath}"
-                }
-             }
-        }
-        stage('Logging into AWS ECR for Frontend') {
-            steps {
-                script {
-                    sh """
-                    aws ecr-public get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${FRONTEND_REPO}
-                    """
-                }
-            }
-        }
-        stage('Building Frontend Image') {
-            steps {
-                dir('angular-java/angular-frontend') {
-                    sh "docker build -t ${FRONTEND_DOCKER_IMAGE_NAME}:${IMAGE_TAG} ."
-                }
-            }
-        }
-        stage('Pushing Frontend Image to ECR') {
-            steps {
-                script {
-                    sh "docker tag ${FRONTEND_DOCKER_IMAGE_NAME}:${IMAGE_TAG} ${FRONTEND_REPO}:${IMAGE_TAG}"
-                    sh "docker push ${FRONTEND_REPO}:${IMAGE_TAG}"
-                }
-            }
-        }
         stage('Replacing Frontend Image URI in Manifest File') {
             steps {
                 script {
@@ -395,9 +120,9 @@ pipeline {
         stage('Clear Workspace') {
             steps {
                 cleanWs()
-            }
+                }
+            }    
         }
-    }
     post {
         always {
             echo 'Pipeline execution completed.'
@@ -408,5 +133,5 @@ pipeline {
         success {
             echo 'Pipeline succeeded.'
         }
-    }
+}
 }

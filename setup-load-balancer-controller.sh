@@ -39,3 +39,30 @@ kubectl apply -f v2_7_2_full.yaml
 curl -Lo v2_7_2_ingclass.yaml https://github.com/kubernetes-sigs/aws-load-balancer-controller/releases/download/v2.7.2/v2_7_2_ingclass.yaml
 kubectl apply -f v2_7_2_ingclass.yaml
 kubectl get deployment -n kube-system aws-load-balancer-controller
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Creating OIDC Provider for cluster
+                    kubectl apply \
+                        --validate=false \
+                        -f https://github.com/jetstack/cert-manager/releases/download/v1.13.5/cert-manager.yaml
+                     curl -Lo /tmp/v2_7_2_full.yaml https://github.com/kubernetes-sigs/aws-load-balancer-controller/releases/download/v2.7.2/v2_7_2_full.yaml
+                    sed -i.bak -e '612,620d' /tmp/v2_7_2_full.yaml
+                    sed -i.bak -e "s|your-cluster-name|msd|" /tmp/v2_7_2_full.yaml
+                    kubectl apply -f /tmp/v2_7_2_full.yaml
+                    curl -Lo /tmp/v2_7_2_ingclass.yaml https://github.com/kubernetes-sigs/aws-load-balancer-controller/releases/download/v2.7.2/v2_7_2_ingclass.yaml
+                    kubectl apply -f /tmp/v2_7_2_ingclass.yaml
+                    kubectl get deployment -n kube-system aws-load-balancer-controller
