@@ -4,6 +4,11 @@ pipeline {
         AWS_ACCESS_KEY_ID = credentials('ACESS_KEY')
         AWS_SECRET_ACCESS_KEY = credentials('SECRET_KEY')
         AWS_REGION = 'us-east-1'
+        CLUSTER_NAME = 'k8s'
+        FRONTEND_DOCKER_IMAGE_NAME = 'frontend'
+        BACKEND_DOCKER_IMAGE_NAME = 'backend'
+        IMAGE_TAG = 'latest'
+        DOCKERHUBUSER = 'shubhamsk512'
     }
         stages{
         stage('Validate AWS CLI Credentials') {
@@ -37,11 +42,20 @@ pipeline {
                 script {
                     withCredentials([usernamePassword(credentialsId:"dockerhubcred", passwordVariable:"dockerhubpass", usernameVariable:"dockerhubuser")]){
                     sh "docker login -u ${env.dockerhubuser} -p ${env.dockerhubpass}"
-                    }
                     dir('angular-java/spring-backend') {
-                    sh "docker build -t ${env.dockerhubuser}:latest ."
-                }
+                    sh "docker build -t ${env.dockerhubuser}/${BACKEND_DOCKER_IMAGE_NAME}:${IMAGE_TAG} ."
+                    sh "docker push ${env.dockerhubuser}/${BACKEND_DOCKER_IMAGE_NAME}:${IMAGE_TAG}"
+                        }
+                    }    
                 }    
+            }
+        }
+        stage('Updating Kubeconfig') {
+            steps {
+                script {
+                    // Updating Cluster Name and Region To Kubeconfig
+                    sh "aws eks --region ${AWS_REGION} update-kubeconfig --name ${CLUSTER_NAME}"
+                }
             }
         }
         stage('Create Namespace') {
@@ -57,6 +71,22 @@ pipeline {
                         sh "kubectl create ns dev"
                         echo "Namespace 'dev' created successfully."
                     }
+                }
+            }
+        }
+        stage('Replacing Backend Image URI in Deployment Manifest File') {
+            steps {
+                script {
+                    def imageName = "${env.DOCKERHUBUSER}/${BACKEND_DOCKER_IMAGE_NAME}:${IMAGE_TAG}"
+                    def manifestFile = 'angular-java/spring-backend/manifest/deployment.yaml'
+
+                    // Use sed to replace the image in the YAML file
+                    sh """
+                    sed -i 's|image:.*|image: ${imageName}|' ${manifestFile}
+                    """
+                    
+                    // verify the replacement
+                    sh "cat ${manifestFile}"
                 }
             }
         }

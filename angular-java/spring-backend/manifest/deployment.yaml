@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: backend
-        image: public.ecr.aws/p0w5f0m4/backend:latest
+        image: shubhamsk512/backend:latest
         ports:
         - containerPort: 8080
 
