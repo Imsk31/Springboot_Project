@@ -8,9 +8,8 @@ pipeline {
         FRONTEND_DOCKER_IMAGE_NAME = 'frontend'
         BACKEND_DOCKER_IMAGE_NAME = 'backend'
         IMAGE_TAG = 'latest'
-        DOCKERHUBUSER = 'shubhamsk512'
     }
-        stages{
+    stages {
         stage('Validate AWS CLI Credentials') {
             steps {
                 script {
@@ -29,14 +28,16 @@ pipeline {
         stage('Checkout SCM') {
             steps {
                 script {
+                    sh"rm -rf *"
+                    // Cloning Git repo
                     checkout(scmGit(
                         branches: [[name: '*/main']],
                         extensions: [],
-                        userRemoteConfigs: [[url: 'https://github.com/Imsk31/angular-springboot.git']]
+                        userRemoteConfigs: [[url: 'https://github.com/Imsk31/Springboot_Project.git']]
                     ))
                 }
             }
-        }    
+        }
         stage('Logging into DockerHub') {
             steps {
                 script {
@@ -74,22 +75,6 @@ pipeline {
                 }
             }
         }
-        stage('Replacing Backend Image URI in Deployment Manifest File') {
-            steps {
-                script {
-                    def imageName = "${env.DOCKERHUBUSER}/${BACKEND_DOCKER_IMAGE_NAME}:${IMAGE_TAG}"
-                    def manifestFile = 'angular-java/spring-backend/manifest/deployment.yaml'
-
-                    // Use sed to replace the image in the YAML file
-                    sh """
-                    sed -i 's|image:.*|image: ${imageName}|' ${manifestFile}
-                    """
-                    
-                    // verify the replacement
-                    sh "cat ${manifestFile}"
-                }
-            }
-        }
         stage('Creating Deployment And service for backend') {
             steps {
                 dir('angular-java/spring-backend/manifest') {
@@ -113,21 +98,41 @@ pipeline {
                     sh '''
                     # Apply the Ingress configuration for the application
                     kubectl apply -f ingress.yaml -n dev
+                    kubectl get ingress -n dev
                     '''
                 }
             }
         }
-        stage('Replacing Frontend Image URI in Manifest File') {
+        stage('Wait for 1 Minute') {
             steps {
                 script {
-                    def imageURI = "${FRONTEND_REPO}:${IMAGE_TAG}"
-                    def manifestFile = 'angular-java/angular-frontend/manifest/deployment.yaml'
-
-                    sh """
-                    sed -i 's|image:.*|image: ${imageURI}|' ${manifestFile}
-                    """
-                    sh "cat ${manifestFile}"
+                    echo "Waiting for 30 Seconds..."
+                    sleep(time: 30, unit: 'SECONDS') // Wait for 30 seconds
                 }
+            }
+        }
+        stage('Replace ALB DNS in Frontend') {
+            steps {
+                script {
+                 def albDNS = sh(script: "kubectl get ingress -n dev -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}'", returnStdout: true).trim()
+                 def serviceFilePath = 'angular-java/angular-frontend/src/app/services/worker.service.ts'
+
+                 // Using double quotes for the outer shell command and single quotes inside for sed
+                 sh "sed -i 's|k8s-default-myapping-8cf2186fe6-1630135583.us-east-1.elb.amazonaws.com|${albDNS}|g' ${serviceFilePath}"
+                }
+             }
+        }
+        stage('Build Tag And Push Frontend Dockerfile Image') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId:"dockerhubcred", passwordVariable:"dockerhubpass", usernameVariable:"dockerhubuser")]){
+                    sh "docker login -u ${env.dockerhubuser} -p ${env.dockerhubpass}"
+                    dir('angular-java/angular-frontend') {
+                    sh "docker build -t ${env.dockerhubuser}/${BACKEND_DOCKER_IMAGE_NAME}:${IMAGE_TAG} ."
+                    sh "docker push ${env.dockerhubuser}/${FRONTEND_DOCKER_IMAGE_NAME}:${IMAGE_TAG}"
+                        }
+                    }    
+                }    
             }
         }
         stage('Frontend Kubernetes Deployment') {
@@ -137,31 +142,5 @@ pipeline {
                 }
             }
         }
-         stage("Delete unneccesary images and containers") {
-            steps {
-                script {
-                    sh ''' 
-                    docker stop $(docker ps -q) && docker rm $(docker ps -aq) && docker system prune -af --volumes 
-                    echo "Deleted all unccessary images and conainers and cleared workspace "
-                    '''
-                }
-            }
-        }
-        stage('Clear Workspace') {
-            steps {
-                cleanWs()
-                }
-            }    
-        }
-    post {
-        always {
-            echo 'Pipeline execution completed.'
-        }
-        failure {
-            echo 'Pipeline failed.'
-        }
-        success {
-            echo 'Pipeline succeeded.'
-        }
-}
+    }
 }

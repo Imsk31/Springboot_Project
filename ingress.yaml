@@ -5,18 +5,25 @@ metadata:
   annotations:
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
+    # Add these annotations for SPA support
+    alb.ingress.kubernetes.io/actions.ssl-redirect: '{"Type": "redirect", "RedirectConfig": { "Protocol": "HTTPS", "Port": "443", "StatusCode": "HTTP_301"}}'
+    alb.ingress.kubernetes.io/actions.frontend-rewrite: >
+      {
+        "Type": "fixed-response",
+        "FixedResponseConfig": {
+          "ContentType": "text/html",
+          "StatusCode": "200",
+          "MessageBody": "<script>history.pushState({}, '', window.location.pathname); window.location.reload(true);</script>"
+        }
+      }
+    # This is crucial for SPA routing
+    alb.ingress.kubernetes.io/rewrite-target: /
 spec:
   ingressClassName: alb
   rules:
     - http:
         paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: frontend
-                port:
-                  number: 80
+          # Backend API path
           - path: /api/v1/workers
             pathType: Prefix
             backend:
@@ -24,3 +31,11 @@ spec:
                 name: backend
                 port:
                   number: 8080
+          # Frontend catch-all path
+          - path: /*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
