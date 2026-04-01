@@ -3,33 +3,33 @@ import { Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 import { Worker } from '../models/worker';
+import { ConfigService } from './config.service';
 
-@Injectable({
-  providedIn: 'root'
-})
+@Injectable({ providedIn: 'root' })
 export class WorkerService {
 
-  private getUrl: string = "http://k8s-default-myapping-8cf2186fe6-1630135583.us-east-1.elb.amazonaws.com/api/v1/workers";
+  constructor(
+    private _httpClient: HttpClient,
+    private _configService: ConfigService
+  ) {}
 
-  constructor(private _httpClient: HttpClient) { }
+  private get baseUrl(): string {
+    return `${this._configService.getBackendApiUrl()}`;
+  }
 
   getWorkers(): Observable<Worker[]> {
-    return this._httpClient.get<Worker[]>(this.getUrl).pipe(
-      map(response => response)
-    )
+    return this._httpClient.get<Worker[]>(this.baseUrl).pipe(map(r => r));
   }
 
   saveWorkers(worker: Worker): Observable<Worker> {
-    return this._httpClient.post<Worker>(this.getUrl, worker);
+    return this._httpClient.post<Worker>(this.baseUrl, worker);
   }
 
   getWorker(id: Number): Observable<Worker> {
-    return this._httpClient.get<Worker>(`${this.getUrl}/${id}`).pipe(
-      map(response => response)
-    )
+    return this._httpClient.get<Worker>(`${this.baseUrl}/${id}`).pipe(map(r => r));
   }
 
   deleteWorker(id: Number): Observable<any> {
-    return this._httpClient.delete(`${this.getUrl}/${id}`, {responseType: 'text'});
+    return this._httpClient.delete(`${this.baseUrl}/${id}`, { responseType: 'text' });
   }
 }
